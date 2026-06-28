@@ -18,7 +18,8 @@ and **ffmpeg**.
 
 | Feature | Description |
 | --- | --- |
-| 📥 **TikTok download (no watermark)** | Send a TikTok link (incl. `vm.`/`vt.tiktok.com` short links) and get the clean, watermark-free video. YouTube, Instagram and hundreds more also work via `yt-dlp`. Image-only photo slideshows are detected and reported. |
+| 📥 **TikTok download (no watermark)** | Send a TikTok link (incl. `vm.`/`vt.tiktok.com` short links) and get the clean, watermark-free video. YouTube, Instagram and hundreds more also work via `yt-dlp`. |
+| 🖼 **TikTok photo slideshows** | Image-only posts are downloaded too — all pictures are sent back as Telegram album(s), plus the background track as an audio file. |
 | 🎲 **Uniquify** | Subtle, randomised transformations (stripped metadata, micro crop/scale, colour tweaks, faint noise, micro speed change, fresh timestamp, full re-encode) so the result differs from the source. |
 | 💧 **Watermark** | Burns a semi-transparent text watermark into the bottom-right corner. |
 | ⚡ **Fully async** | Non-blocking downloads (`asyncio.to_thread`) and ffmpeg jobs (`asyncio` subprocesses) with a concurrency semaphore. |

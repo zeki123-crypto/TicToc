@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 from aiogram import F, Router
-from aiogram.types import Message
+from aiogram.types import (
+    FSInputFile,
+    InputMediaPhoto,
+    Message,
+)
 
 from app import keyboards, texts
 from app.config import settings
@@ -10,11 +14,20 @@ from app.logging_config import get_logger
 from app.services.downloader import (
     DownloadError,
     DurationLimitError,
+    PhotoPostError,
+    PhotoResult,
     VideoDownloader,
 )
-from app.services.downloader import PhotoPostError
 from app.services.session_store import ActiveVideo, SessionStore
-from app.utils.helpers import detect_platform, extract_url, format_duration
+from app.utils.helpers import (
+    detect_platform,
+    extract_url,
+    format_duration,
+    safe_unlink,
+)
+
+# Telegram allows at most 10 items per media group.
+_ALBUM_CHUNK = 10
 
 log = get_logger(__name__)
 router = Router(name="download")
@@ -51,7 +64,7 @@ async def handle_link(
         )
         return
     except PhotoPostError:
-        await status.edit_text(texts.TIKTOK_PHOTO_POST)
+        await _handle_photo_post(message, status, downloader, url)
         return
     except DownloadError as exc:
         await status.edit_text(texts.DOWNLOAD_FAILED.format(error=str(exc)[:200]))
@@ -74,6 +87,44 @@ async def handle_link(
         ),
         reply_markup=keyboards.action_menu(),
     )
+
+
+async def _handle_photo_post(
+    message: Message,
+    status: Message,
+    downloader: VideoDownloader,
+    url: str,
+) -> None:
+    """Download a TikTok photo slideshow and send the images as album(s)."""
+    await status.edit_text(texts.PHOTO_DOWNLOADING)
+
+    try:
+        result: PhotoResult = await downloader.download_photos(url)
+    except DownloadError as exc:
+        await status.edit_text(texts.PHOTO_FAILED.format(error=str(exc)[:200]))
+        return
+
+    try:
+        await status.edit_text(
+            texts.PHOTO_DONE.format(title=result.title[:80], count=len(result.images))
+        )
+        # Telegram caps a media group at 10 items, so send in chunks.
+        for start in range(0, len(result.images), _ALBUM_CHUNK):
+            chunk = result.images[start : start + _ALBUM_CHUNK]
+            media = [InputMediaPhoto(media=FSInputFile(p)) for p in chunk]
+            await message.answer_media_group(media)
+
+        # Send the background track, if TikTok provided one.
+        if result.audio and result.audio.exists():
+            await message.answer_audio(
+                FSInputFile(result.audio), caption=texts.PHOTO_AUDIO_CAPTION
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.error("photo.send_failed", error=str(exc))
+        await message.answer(texts.GENERIC_ERROR)
+    finally:
+        for path in result.all_paths():
+            safe_unlink(path)
 
 
 @router.message(F.text & ~F.text.startswith("/"))

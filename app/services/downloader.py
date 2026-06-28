@@ -53,6 +53,21 @@ class DownloadResult:
         return self.path.stat().st_size if self.path.exists() else 0
 
 
+@dataclass(slots=True)
+class PhotoResult:
+    """Result of downloading an image-only post (e.g. a TikTok slideshow)."""
+
+    images: list[Path]
+    title: str
+    audio: Path | None = None
+
+    def all_paths(self) -> list[Path]:
+        paths = list(self.images)
+        if self.audio:
+            paths.append(self.audio)
+        return paths
+
+
 class VideoDownloader:
     """Thin async wrapper around yt-dlp."""
 
@@ -194,4 +209,74 @@ class VideoDownloader:
             path=str(result.path),
             size_mb=round(result.size_bytes / (1024 * 1024), 2),
         )
+        return result
+
+    # ------------------------------------------------------------------ #
+    #  Image-post (TikTok slideshow) support
+    # ------------------------------------------------------------------ #
+    _IMAGE_EXTS = {"jpg", "jpeg", "png", "webp", "heic", "gif"}
+    _AUDIO_EXTS = {"mp3", "m4a", "aac", "opus", "ogg", "wav"}
+
+    def _build_photo_opts(self, output_template: str) -> dict:
+        """yt-dlp options for image posts.
+
+        No video format selection and no mp4 convertor — we just let yt-dlp
+        fetch every image (and the background track, when present) to disk.
+        """
+        return {
+            "outtmpl": output_template,
+            "quiet": True,
+            "no_warnings": True,
+            "nocheckcertificate": True,
+            "retries": 3,
+            "socket_timeout": 30,
+            "restrictfilenames": True,
+            "ignoreerrors": True,
+            "writethumbnail": False,
+        }
+
+    def _download_photos_sync(self, url: str) -> PhotoResult:
+        """Blocking image-post download — runs in a worker thread."""
+        token = uuid.uuid4().hex
+        output_template = str(self.download_dir / f"{token}.%(autonumber)s.%(ext)s")
+        opts = self._build_photo_opts(output_template)
+
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            if info is None:
+                raise DownloadError("No information returned for this URL.")
+            title = (info.get("title") or "slideshow").strip()
+            ydl.extract_info(url, download=True)
+
+        # Collect everything written for this token and split by type.
+        files = sorted(self.download_dir.glob(f"{token}.*"))
+        images = [p for p in files if p.suffix.lstrip(".").lower() in self._IMAGE_EXTS]
+        audio = next(
+            (p for p in files if p.suffix.lstrip(".").lower() in self._AUDIO_EXTS),
+            None,
+        )
+
+        if not images:
+            # Clean up any stray files and report failure.
+            for p in files:
+                p.unlink(missing_ok=True)
+            raise DownloadError("No images were found in this post.")
+
+        return PhotoResult(images=images, title=title, audio=audio)
+
+    async def download_photos(self, url: str) -> PhotoResult:
+        """Download all images (and music) of an image-only post."""
+        log.info("photos.start", url=url)
+        try:
+            result = await asyncio.to_thread(self._download_photos_sync, url)
+        except DownloadError:
+            raise
+        except yt_dlp.utils.DownloadError as exc:  # type: ignore[attr-defined]
+            log.warning("photos.failed", url=url, error=str(exc))
+            raise DownloadError(str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            log.error("photos.error", url=url, error=str(exc))
+            raise DownloadError(str(exc)) from exc
+
+        log.info("photos.done", url=url, count=len(result.images), audio=bool(result.audio))
         return result
