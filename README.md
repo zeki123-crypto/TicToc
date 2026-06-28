@@ -63,6 +63,14 @@ app/
 
 ---
 
+## ☁️ Deploy to Railway
+
+See **[DEPLOY.md](DEPLOY.md)** for a 10-minute, step-by-step Railway guide
+(Docker build + Redis add-on). The repo ships `railway.json`, `Dockerfile` and
+`.dockerignore`, and the bot auto-detects Railway's `REDIS_URL`.
+
+---
+
 ## 🚀 Quick start (Docker, recommended)
 
 ```bash

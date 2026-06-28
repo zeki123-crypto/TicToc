@@ -8,8 +8,10 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_DEFAULT_REDIS = "redis://localhost:6379/0"
 
 
 class Settings(BaseSettings):
@@ -26,8 +28,13 @@ class Settings(BaseSettings):
     admin_ids: list[int] = Field(default_factory=list, alias="ADMIN_IDS")
 
     # --- Storage ---
+    # On managed platforms (e.g. Railway) the Redis add-on exposes ``REDIS_URL``,
+    # so we accept either ``REDIS_DSN`` or ``REDIS_URL``.
     storage_type: str = Field("memory", alias="STORAGE_TYPE")
-    redis_dsn: str = Field("redis://localhost:6379/0", alias="REDIS_DSN")
+    redis_dsn: str = Field(
+        _DEFAULT_REDIS,
+        validation_alias=AliasChoices("REDIS_DSN", "REDIS_URL"),
+    )
 
     # --- Downloads ---
     download_dir: Path = Field(Path("downloads"), alias="DOWNLOAD_DIR")
@@ -56,6 +63,14 @@ class Settings(BaseSettings):
         if isinstance(value, (list, tuple)):
             return [int(v) for v in value]
         raise ValueError("ADMIN_IDS must be a comma-separated string of ids")
+
+    @model_validator(mode="after")
+    def _auto_enable_redis(self) -> "Settings":
+        """If a real Redis URL is supplied but STORAGE_TYPE was left at the
+        default, switch to Redis automatically (handy on Railway/Render)."""
+        if self.storage_type.lower() == "memory" and self.redis_dsn != _DEFAULT_REDIS:
+            self.storage_type = "redis"
+        return self
 
     @property
     def max_file_size_bytes(self) -> int:
