@@ -63,11 +63,14 @@ app/
 
 ---
 
-## ☁️ Deploy to Railway
+## ☁️ Deploy
 
-See **[DEPLOY.md](DEPLOY.md)** for a 10-minute, step-by-step Railway guide
-(Docker build + Redis add-on). The repo ships `railway.json`, `Dockerfile` and
-`.dockerignore`, and the bot auto-detects Railway's `REDIS_URL`.
+- **VPS (Hetzner / any Ubuntu server) — recommended for reliable 24/7:**
+  see **[DEPLOY_VPS.md](DEPLOY_VPS.md)**. One-command Docker setup
+  (`deploy/setup.sh`), update script (`deploy/deploy.sh`) and an optional
+  systemd unit.
+- **Railway (PaaS, deploy from GitHub):** see **[DEPLOY.md](DEPLOY.md)**.
+  Ships `railway.json`; the bot auto-detects Railway's `REDIS_URL`.
 
 ---
 

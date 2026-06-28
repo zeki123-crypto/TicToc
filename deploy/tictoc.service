@@ -1,0 +1,32 @@
+# Optional systemd unit to manage the bot via `systemctl`.
+# The Compose file already uses `restart: unless-stopped`, so Docker restarts
+# the bot on crash/reboot on its own. This unit is only needed if you prefer
+# managing the stack with systemctl (start/stop/status).
+#
+# Install:
+#   sudo cp deploy/tictoc.service /etc/systemd/system/tictoc.service
+#   # edit WorkingDirectory below to your actual repo path
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now tictoc.service
+#
+# Manage:
+#   sudo systemctl status tictoc
+#   sudo systemctl restart tictoc
+#   sudo journalctl -u tictoc -f
+
+[Unit]
+Description=TicToc Telegram bot (docker compose)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/TicToc
+ExecStart=/usr/bin/docker compose up -d --build
+ExecStop=/usr/bin/docker compose down
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target
