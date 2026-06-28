@@ -30,6 +30,13 @@ class DurationLimitError(DownloadError):
         super().__init__(f"Video too long: {duration}s")
 
 
+class PhotoPostError(DownloadError):
+    """Raised for image-only posts (e.g. a TikTok photo slideshow)."""
+
+    def __init__(self) -> None:
+        super().__init__("This post contains images, not a video.")
+
+
 @dataclass(slots=True)
 class DownloadResult:
     """Metadata about a downloaded video."""
@@ -58,6 +65,12 @@ class VideoDownloader:
 
         We prefer an mp4/h264 result so the file plays everywhere and is ready
         for ffmpeg post-processing.
+
+        TikTok note: yt-dlp's default "best" selection returns the
+        **watermark-free** stream (``play_addr`` / bytevc), not the branded
+        ``download_addr`` copy, so no special handling is needed to drop the
+        TikTok logo. The ``bestvideo+bestaudio`` branch simply doesn't match
+        TikTok's single muxed file and gracefully falls through to ``best``.
         """
         return {
             "outtmpl": output_template,
@@ -73,11 +86,35 @@ class VideoDownloader:
             "retries": 3,
             "socket_timeout": 30,
             "restrictfilenames": True,
+            # Follow short-link redirects (vm.tiktok.com / vt.tiktok.com).
+            "extractor_args": {"tiktok": {"webpage_download": ["1"]}},
             # Postprocessor guarantees a final mp4 container.
             "postprocessors": [
                 {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"},
             ],
         }
+
+    @staticmethod
+    def _is_photo_post(info: dict) -> bool:
+        """Detect an image-only post (e.g. a TikTok photo slideshow)."""
+        image_exts = {"jpg", "jpeg", "png", "webp", "heic", "gif"}
+
+        # A slideshow is usually a playlist whose entries carry no video codec.
+        entries = info.get("entries")
+        if entries:
+            first = entries[0] or {}
+            formats = first.get("formats") or []
+            has_video = any(
+                f.get("vcodec") not in (None, "none") for f in formats
+            ) or (first.get("vcodec") not in (None, "none"))
+            return not has_video and not first.get("duration")
+
+        formats = info.get("formats") or []
+        if formats:
+            return not any(f.get("vcodec") not in (None, "none") for f in formats)
+
+        # Single-file result with an image extension and no duration.
+        return info.get("ext") in image_exts and not info.get("duration")
 
     def _download_sync(self, url: str) -> DownloadResult:
         """Blocking download — runs in a worker thread."""
@@ -90,6 +127,10 @@ class VideoDownloader:
             info = ydl.extract_info(url, download=False)
             if info is None:
                 raise DownloadError("No information returned for this URL.")
+
+            # Reject image-only posts (e.g. TikTok photo slideshows) early.
+            if self._is_photo_post(info):
+                raise PhotoPostError()
 
             # A playlist/multi-entry result: take the first entry.
             if info.get("_type") == "playlist" and info.get("entries"):
@@ -138,7 +179,7 @@ class VideoDownloader:
         log.info("download.start", url=url)
         try:
             result = await asyncio.to_thread(self._download_sync, url)
-        except DurationLimitError:
+        except (DurationLimitError, PhotoPostError):
             raise
         except yt_dlp.utils.DownloadError as exc:  # type: ignore[attr-defined]
             log.warning("download.failed", url=url, error=str(exc))

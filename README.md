@@ -1,8 +1,9 @@
 # 🎬 TicToc — Telegram Video Downloader & Processor Bot
 
 A modern, fully-asynchronous, production-ready Telegram bot that **downloads
-videos by link** and then, on request, **uniquifies** them or adds a **text
-watermark**.
+TikTok videos by link (without the TikTok watermark)** — and YouTube,
+Instagram and hundreds of other sources too — then, on request, **uniquifies**
+them or adds your own **text watermark**.
 
 Built with a clean, modular architecture on top of
 [**aiogram 3**](https://docs.aiogram.dev/), [**yt-dlp**](https://github.com/yt-dlp/yt-dlp)
@@ -17,7 +18,7 @@ and **ffmpeg**.
 
 | Feature | Description |
 | --- | --- |
-| 📥 **Download by link** | Send a URL — the bot fetches the video via `yt-dlp` (YouTube, TikTok, Instagram and hundreds more). |
+| 📥 **TikTok download (no watermark)** | Send a TikTok link (incl. `vm.`/`vt.tiktok.com` short links) and get the clean, watermark-free video. YouTube, Instagram and hundreds more also work via `yt-dlp`. Image-only photo slideshows are detected and reported. |
 | 🎲 **Uniquify** | Subtle, randomised transformations (stripped metadata, micro crop/scale, colour tweaks, faint noise, micro speed change, fresh timestamp, full re-encode) so the result differs from the source. |
 | 💧 **Watermark** | Burns a semi-transparent text watermark into the bottom-right corner. |
 | ⚡ **Fully async** | Non-blocking downloads (`asyncio.to_thread`) and ffmpeg jobs (`asyncio` subprocesses) with a concurrency semaphore. |

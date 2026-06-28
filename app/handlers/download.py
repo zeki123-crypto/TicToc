@@ -12,8 +12,9 @@ from app.services.downloader import (
     DurationLimitError,
     VideoDownloader,
 )
+from app.services.downloader import PhotoPostError
 from app.services.session_store import ActiveVideo, SessionStore
-from app.utils.helpers import extract_url, format_duration
+from app.utils.helpers import detect_platform, extract_url, format_duration
 
 log = get_logger(__name__)
 router = Router(name="download")
@@ -31,7 +32,13 @@ async def handle_link(
         await message.answer(texts.NOT_A_LINK)
         return
 
-    status = await message.answer(texts.DOWNLOADING)
+    platform = detect_platform(url)
+    status_text = (
+        texts.DOWNLOADING_FROM.format(platform=platform)
+        if platform
+        else texts.DOWNLOADING
+    )
+    status = await message.answer(status_text)
 
     try:
         result = await downloader.download(url)
@@ -42,6 +49,9 @@ async def handle_link(
                 limit=format_duration(settings.max_duration_seconds),
             )
         )
+        return
+    except PhotoPostError:
+        await status.edit_text(texts.TIKTOK_PHOTO_POST)
         return
     except DownloadError as exc:
         await status.edit_text(texts.DOWNLOAD_FAILED.format(error=str(exc)[:200]))
