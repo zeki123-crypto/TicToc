@@ -12,6 +12,8 @@ from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _DEFAULT_REDIS = "redis://localhost:6379/0"
+# Font shipped with the package so watermarks work in any environment.
+_BUNDLED_FONT = Path(__file__).resolve().parent / "assets" / "DejaVuSans-Bold.ttf"
 
 
 class Settings(BaseSettings):
@@ -45,7 +47,7 @@ class Settings(BaseSettings):
     throttle_rate: float = Field(2.0, alias="THROTTLE_RATE")
     max_concurrent_jobs: int = Field(2, alias="MAX_CONCURRENT_JOBS")
     watermark_font: str = Field(
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        str(_BUNDLED_FONT),
         alias="WATERMARK_FONT",
     )
 

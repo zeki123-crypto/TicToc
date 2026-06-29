@@ -8,6 +8,15 @@ pydantic-settings==2.5.2
 # --- Video downloading ---
 yt-dlp==2024.11.18
 
+# --- Bundled ffmpeg binary (fallback when no system ffmpeg is present,
+#     e.g. on PaaS auto-build environments). The Dockerfile still installs a
+#     full system ffmpeg, which takes priority. ---
+imageio-ffmpeg==0.6.0
+
+# --- Watermark rendering. The bundled ffmpeg lacks the drawtext filter, so we
+#     render the watermark text to a PNG with Pillow and overlay it instead. ---
+pillow==11.0.0
+
 # --- Storage / FSM backend ---
 redis==5.1.1
 

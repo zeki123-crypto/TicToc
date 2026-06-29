@@ -15,13 +15,15 @@ from __future__ import annotations
 
 import asyncio
 import random
-import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from PIL import Image, ImageDraw, ImageFont
+
 from app.config import settings
 from app.logging_config import get_logger
+from app.utils.ffmpeg import ffmpeg_path
 
 log = get_logger(__name__)
 
@@ -33,16 +35,13 @@ class ProcessingError(Exception):
     """Raised when ffmpeg fails to process a video."""
 
 
-def _ffmpeg_available() -> bool:
-    return shutil.which("ffmpeg") is not None
-
-
 async def _run_ffmpeg(args: list[str]) -> None:
     """Run ffmpeg with the given arguments, raising on failure."""
-    if not _ffmpeg_available():
-        raise ProcessingError("ffmpeg is not installed or not on PATH.")
+    exe = ffmpeg_path()
+    if not exe:
+        raise ProcessingError("ffmpeg is not available.")
 
-    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", *args]
+    cmd = [exe, "-y", "-hide_banner", "-loglevel", "error", *args]
     log.debug("ffmpeg.run", cmd=" ".join(cmd))
 
     async with _semaphore:
@@ -65,13 +64,38 @@ def _output_path(source: Path, suffix: str) -> Path:
     return source.with_name(f"{source.stem}_{suffix}_{token}.mp4")
 
 
-def _escape_drawtext(text: str) -> str:
-    """Escape a string for use inside ffmpeg's drawtext filter."""
-    text = text.replace("\\", "\\\\")
-    text = text.replace(":", r"\:")
-    text = text.replace("'", r"’")  # avoid quote-parsing headaches
-    text = text.replace("%", r"\%")
-    return text
+def _render_watermark_png(text: str, dest: Path) -> None:
+    """Render watermark text to a transparent PNG using Pillow.
+
+    We draw white text with a dark stroke (so it's readable on any background)
+    on a fully transparent canvas. This avoids ffmpeg's ``drawtext`` filter,
+    which is absent from the bundled (imageio) ffmpeg build.
+    """
+    try:
+        font = ImageFont.truetype(settings.watermark_font, 96)
+    except OSError:
+        font = ImageFont.load_default()
+
+    stroke = 4
+    pad = 12
+    measure = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    left, top, right, bottom = measure.textbbox(
+        (0, 0), text, font=font, stroke_width=stroke
+    )
+    width = (right - left) + pad * 2
+    height = (bottom - top) + pad * 2
+
+    img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.text(
+        (pad - left, pad - top),
+        text,
+        font=font,
+        fill=(255, 255, 255, 235),
+        stroke_width=stroke,
+        stroke_fill=(0, 0, 0, 160),
+    )
+    img.save(dest, "PNG")
 
 
 class VideoProcessor:
@@ -124,22 +148,26 @@ class VideoProcessor:
         return out
 
     async def watermark(self, source: Path, text: str) -> Path:
-        """Burn a semi-transparent text watermark into the bottom-right corner."""
+        """Overlay a semi-transparent text watermark in the bottom-right corner.
+
+        The text is rendered to a PNG with Pillow and composited via the
+        ``overlay`` filter (sized to ~7% of the video height with ``scale2ref``),
+        so it works even with the bundled ffmpeg that lacks ``drawtext``.
+        """
         out = _output_path(source, "wm")
-        safe_text = _escape_drawtext(text)
-        font = settings.watermark_font
+        wm_png = source.with_name(f"{source.stem}_wm_{uuid.uuid4().hex[:8]}.png")
 
-        fontfile = f"fontfile='{font}':" if Path(font).exists() else ""
-        drawtext = (
-            f"drawtext={fontfile}text='{safe_text}':"
-            "fontcolor=white@0.85:fontsize=h/18:"
-            "box=1:boxcolor=black@0.4:boxborderw=8:"
-            "x=w-tw-20:y=h-th-20"
+        # Pillow is blocking — render off the event loop.
+        await asyncio.to_thread(_render_watermark_png, text, wm_png)
+
+        filter_complex = (
+            "[1:v][0:v]scale2ref=w=-1:h=main_h*0.07[wm][base];"
+            "[base][wm]overlay=W-w-25:H-h-25"
         )
-
         args = [
             "-i", str(source),
-            "-vf", drawtext,
+            "-i", str(wm_png),
+            "-filter_complex", filter_complex,
             "-c:v", "libx264",
             "-preset", "veryfast",
             "-crf", "23",
@@ -148,6 +176,9 @@ class VideoProcessor:
             str(out),
         ]
         log.info("watermark.start", source=str(source), text=text)
-        await _run_ffmpeg(args)
+        try:
+            await _run_ffmpeg(args)
+        finally:
+            wm_png.unlink(missing_ok=True)
         log.info("watermark.done", out=str(out))
         return out

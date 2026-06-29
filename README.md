@@ -66,9 +66,9 @@ app/
 ## ☁️ Deploy
 
 - **Bothost.ru (RU bot hosting, deploy from Git):** see
-  **[DEPLOY_BOTHOST.md](DEPLOY_BOTHOST.md)**. Use the **Dockerfile** build so
-  ffmpeg is available, and the «Базовый» tier (env vars + 1 GB RAM). Ships
-  `main.py`, `Procfile`, `runtime.txt`.
+  **[DEPLOY_BOTHOST.md](DEPLOY_BOTHOST.md)**. Works on Bothost's Python
+  auto-build (ffmpeg is bundled via `imageio-ffmpeg`); use the «Базовый» tier
+  (env vars + 1 GB RAM). Ships `main.py`, `Procfile`, `runtime.txt`.
 - **VPS (Hetzner / any Ubuntu server) — most reliable 24/7:**
   see **[DEPLOY_VPS.md](DEPLOY_VPS.md)**. One-command Docker setup
   (`deploy/setup.sh`), update script (`deploy/deploy.sh`) and an optional

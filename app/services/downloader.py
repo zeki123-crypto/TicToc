@@ -14,6 +14,7 @@ import yt_dlp
 
 from app.config import settings
 from app.logging_config import get_logger
+from app.utils.ffmpeg import ffmpeg_path
 
 log = get_logger(__name__)
 
@@ -87,7 +88,7 @@ class VideoDownloader:
         TikTok logo. The ``bestvideo+bestaudio`` branch simply doesn't match
         TikTok's single muxed file and gracefully falls through to ``best``.
         """
-        return {
+        opts = {
             "outtmpl": output_template,
             "format": (
                 "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/"
@@ -108,6 +109,12 @@ class VideoDownloader:
                 {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"},
             ],
         }
+        # Point yt-dlp at our resolved ffmpeg (system or imageio-bundled) so
+        # merging/conversion works even when ffmpeg isn't on PATH.
+        exe = ffmpeg_path()
+        if exe:
+            opts["ffmpeg_location"] = exe
+        return opts
 
     @staticmethod
     def _is_photo_post(info: dict) -> bool:
@@ -223,7 +230,7 @@ class VideoDownloader:
         No video format selection and no mp4 convertor — we just let yt-dlp
         fetch every image (and the background track, when present) to disk.
         """
-        return {
+        opts = {
             "outtmpl": output_template,
             "quiet": True,
             "no_warnings": True,
@@ -234,6 +241,10 @@ class VideoDownloader:
             "ignoreerrors": True,
             "writethumbnail": False,
         }
+        exe = ffmpeg_path()
+        if exe:
+            opts["ffmpeg_location"] = exe
+        return opts
 
     def _download_photos_sync(self, url: str) -> PhotoResult:
         """Blocking image-post download — runs in a worker thread."""
