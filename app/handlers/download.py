@@ -23,6 +23,7 @@ from app.utils.helpers import (
     detect_platform,
     extract_url,
     format_duration,
+    normalize_url,
     safe_unlink,
 )
 
@@ -44,6 +45,7 @@ async def handle_link(
     if not url:
         await message.answer(texts.NOT_A_LINK)
         return
+    url = normalize_url(url)
 
     platform = detect_platform(url)
     status_text = (

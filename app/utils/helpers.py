@@ -45,6 +45,21 @@ def is_tiktok(url: str | None) -> bool:
     return detect_platform(url) == "TikTok"
 
 
+def normalize_url(url: str | None) -> str | None:
+    """Normalise known URL quirks before handing the URL to yt-dlp.
+
+    TikTok photo (slideshow) posts use a ``/photo/`` path that many yt-dlp
+    versions don't match ("Unsupported URL"). The same post is reachable via
+    the ``/video/`` form, where yt-dlp returns the image carousel — so we
+    rewrite ``/photo/`` to ``/video/`` for TikTok links.
+    """
+    if not url:
+        return url
+    if "tiktok.com" in url.lower() and "/photo/" in url:
+        url = url.replace("/photo/", "/video/")
+    return url
+
+
 def format_duration(seconds: float | int | None) -> str:
     """Format a duration in seconds as H:MM:SS or M:SS."""
     if not seconds:
