@@ -6,7 +6,9 @@ pydantic==2.9.2
 pydantic-settings==2.5.2
 
 # --- Video downloading ---
-yt-dlp==2024.11.18
+# TikTok changes its site often; keep yt-dlp recent. Bump this when extraction
+# starts failing ("Unable to extract ..."), since fixes ship in new releases.
+yt-dlp==2026.6.9
 
 # --- Bundled ffmpeg binary, used when no system ffmpeg is present (e.g. on
 #     PaaS auto-build environments). A system ffmpeg on PATH takes priority. ---
