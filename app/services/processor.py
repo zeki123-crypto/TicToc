@@ -104,9 +104,9 @@ def _render_watermark_png(text: str, dest: Path) -> None:
         (pad - left, pad - top),
         text,
         font=font,
-        fill=(255, 255, 255, 235),
+        fill=(255, 255, 255, 255),
         stroke_width=stroke,
-        stroke_fill=(0, 0, 0, 160),
+        stroke_fill=(0, 0, 0, 200),
     )
     img.save(dest, "PNG")
 
@@ -118,28 +118,30 @@ class VideoProcessor:
         """Produce a perceptually-similar but distinct copy of the video."""
         out = _output_path(source, "unique")
 
-        # Randomised, subtle parameters — different on every run.
-        brightness = round(random.uniform(-0.04, 0.04), 3)
-        contrast = round(random.uniform(0.96, 1.05), 3)
-        saturation = round(random.uniform(0.94, 1.07), 3)
-        gamma = round(random.uniform(0.96, 1.04), 3)
-        # Crop a few pixels and scale back up to the original size, which shifts
-        # every pixel slightly without visibly changing the framing.
-        crop_px = random.choice([2, 4, 6])
-        tempo = round(random.uniform(0.98, 1.02), 3)
+        # Stronger, randomised transforms so platforms (TikTok etc.) are far
+        # less likely to flag the result as a duplicate/repost. Every run differs.
+        brightness = round(random.uniform(-0.06, 0.06), 3)
+        contrast = round(random.uniform(0.92, 1.08), 3)
+        saturation = round(random.uniform(0.90, 1.12), 3)
+        gamma = round(random.uniform(0.93, 1.07), 3)
+        # Noticeable zoom (crop then scale back) changes framing & every pixel.
+        crop_px = random.choice([8, 12, 16, 20])
+        # Bigger speed change shifts both the video and the audio fingerprint.
+        tempo = round(random.uniform(0.93, 1.07), 3)
         fresh_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
-        # NB: no per-pixel `noise` filter here — it's very CPU-heavy and would
-        # stall encoding on small (1 vCPU) hosts. The crop/scale + colour tweaks
-        # + full re-encode already change every pixel and all perceptual hashes.
+        # hflip (mirror) is the single most effective change against perceptual
+        # hashing. No per-pixel `noise` filter — too CPU-heavy on 1-vCPU hosts;
+        # the mirror + zoom + colour + re-encode already change every pixel.
         vf = (
+            "hflip,"
             f"crop=iw-{crop_px}:ih-{crop_px},"
             f"scale=iw+{crop_px}:ih+{crop_px},"
             f"eq=brightness={brightness}:contrast={contrast}:"
             f"saturation={saturation}:gamma={gamma},"
             f"setpts={round(1 / tempo, 4)}*PTS"
         )
-        # Keep audio in sync with the video speed change.
+        # Keep audio in sync with the speed change (also alters its fingerprint).
         af = f"atempo={tempo}"
 
         args = [
@@ -183,7 +185,7 @@ class VideoProcessor:
         #     complex filtergraph ffmpeg won't auto-map the video;
         #   * "0:a?" keeps the audio if the source has any.
         filter_complex = (
-            "[1:v][0:v]scale2ref=w=-1:h=main_h*0.07[wm][base];"
+            "[1:v][0:v]scale2ref=w=-1:h=main_h*0.09[wm][base];"
             "[base][wm]overlay=W-w-25:H-h-25:shortest=1[out]"
         )
         args = [
