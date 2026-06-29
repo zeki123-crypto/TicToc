@@ -30,8 +30,8 @@ class Settings(BaseSettings):
     admin_ids: list[int] = Field(default_factory=list, alias="ADMIN_IDS")
 
     # --- Storage ---
-    # On managed platforms (e.g. Railway) the Redis add-on exposes ``REDIS_URL``,
-    # so we accept either ``REDIS_DSN`` or ``REDIS_URL``.
+    # Some managed Redis add-ons expose ``REDIS_URL``, so we accept either
+    # ``REDIS_DSN`` or ``REDIS_URL``.
     storage_type: str = Field("memory", alias="STORAGE_TYPE")
     redis_dsn: str = Field(
         _DEFAULT_REDIS,
@@ -69,7 +69,7 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _auto_enable_redis(self) -> "Settings":
         """If a real Redis URL is supplied but STORAGE_TYPE was left at the
-        default, switch to Redis automatically (handy on Railway/Render)."""
+        default, switch to Redis automatically."""
         if self.storage_type.lower() == "memory" and self.redis_dsn != _DEFAULT_REDIS:
             self.storage_type = "redis"
         return self

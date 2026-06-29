@@ -1,9 +1,9 @@
 """Locate an ffmpeg binary.
 
 Prefer a system-installed ffmpeg (full build, includes ffprobe). If none is on
-PATH — common on auto-build PaaS environments that don't run our Dockerfile —
-fall back to the binary bundled with the ``imageio-ffmpeg`` pip package, so the
-bot's video features work everywhere without apt/Docker.
+PATH — common on auto-build PaaS environments — fall back to the binary bundled
+with the ``imageio-ffmpeg`` pip package, so the bot's video features work
+everywhere without apt.
 """
 from __future__ import annotations
 
