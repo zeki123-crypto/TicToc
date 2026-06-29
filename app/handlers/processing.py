@@ -1,86 +1,23 @@
-"""Handles the post-download action menu: send / uniquify / watermark."""
+"""Handles the post-download actions: uniquify / watermark."""
 from __future__ import annotations
-
-from pathlib import Path
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, FSInputFile, Message
+from aiogram.types import CallbackQuery, Message
 
 from app import keyboards, texts
-from app.config import settings
+from app.handlers.sending import send_video
 from app.logging_config import get_logger
 from app.services.processor import ProcessingError, VideoProcessor
 from app.services.session_store import ActiveVideo, SessionStore
 from app.states import WatermarkFlow
-from app.utils.helpers import human_size, safe_unlink
 
 log = get_logger(__name__)
 router = Router(name="processing")
 
 
-async def _send_video(
-    message: Message,
-    path: Path,
-    caption: str,
-    *,
-    cleanup: bool = True,
-) -> bool:
-    """Send a video file, enforcing the Telegram size limit.
-
-    Returns True on success. When ``cleanup`` is set the file is removed
-    afterwards (used for transient processed outputs).
-    """
-    size = path.stat().st_size if path.exists() else 0
-    if size == 0:
-        await message.answer(texts.SESSION_EXPIRED)
-        return False
-
-    if size > settings.max_file_size_bytes:
-        await message.answer(
-            texts.FILE_TOO_LARGE.format(
-                size=human_size(size), limit=settings.max_file_size_mb
-            )
-        )
-        if cleanup:
-            safe_unlink(path)
-        return False
-
-    try:
-        await message.answer_video(
-            FSInputFile(path),
-            caption=caption,
-            supports_streaming=True,
-        )
-        return True
-    except Exception as exc:  # noqa: BLE001
-        log.error("send_video.failed", error=str(exc), path=str(path))
-        await message.answer(texts.GENERIC_ERROR)
-        return False
-    finally:
-        if cleanup:
-            safe_unlink(path)
-
-
 def _get_active(store: SessionStore, chat_id: int) -> ActiveVideo | None:
     return store.get(chat_id)
-
-
-# --------------------------------------------------------------------------- #
-#  Callback: send original
-# --------------------------------------------------------------------------- #
-@router.callback_query(F.data == keyboards.CB_SEND_ORIGINAL)
-async def on_send_original(query: CallbackQuery, store: SessionStore) -> None:
-    await query.answer()
-    video = _get_active(store, query.message.chat.id)
-    if not video:
-        await query.message.answer(texts.SESSION_EXPIRED)
-        return
-
-    # Don't delete the source here — keep it so the user can still process it.
-    await _send_video(
-        query.message, video.path, texts.ORIGINAL_CAPTION, cleanup=False
-    )
 
 
 # --------------------------------------------------------------------------- #
@@ -103,8 +40,21 @@ async def on_uniquify(
         await status.edit_text(texts.PROCESSING_FAILED.format(error=str(exc)[:200]))
         return
 
+    # Make the uniquified file the active video so a follow-up watermark is
+    # applied to it (this also deletes the previous source file).
+    store.set(
+        query.message.chat.id,
+        ActiveVideo(path=out, title=video.title, duration=video.duration),
+    )
+
     await status.delete()
-    await _send_video(query.message, out, texts.UNIQUIFIED_CAPTION, cleanup=True)
+    await send_video(
+        query.message,
+        out,
+        texts.UNIQUIFIED_CAPTION,
+        reply_markup=keyboards.after_uniquify_menu(),
+        cleanup=False,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -151,11 +101,11 @@ async def on_watermark_text(
         return
 
     await status.delete()
-    await _send_video(message, out, texts.WATERMARKED_CAPTION, cleanup=True)
+    await send_video(message, out, texts.WATERMARKED_CAPTION, cleanup=True)
 
 
 # --------------------------------------------------------------------------- #
-#  Callback: cancel
+#  Callback: cancel (kept for older messages still showing a cancel button)
 # --------------------------------------------------------------------------- #
 @router.callback_query(F.data == keyboards.CB_CANCEL)
 async def on_cancel(

@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import random
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -77,12 +78,13 @@ def _output_path(source: Path, suffix: str) -> Path:
     return source.with_name(f"{source.stem}_{suffix}_{token}.mp4")
 
 
-def _render_watermark_png(text: str, dest: Path) -> None:
+def _render_watermark_png(text: str, dest: Path, target_width: int | None = None) -> None:
     """Render watermark text to a transparent PNG using Pillow.
 
-    We draw white text with a dark stroke (so it's readable on any background)
-    on a fully transparent canvas. This avoids ffmpeg's ``drawtext`` filter,
-    which is absent from the bundled (imageio) ffmpeg build.
+    Semi-transparent light-grey text with a faint dark outline (readable on any
+    background). Avoids ffmpeg's ``drawtext`` (absent from the bundled build).
+    If ``target_width`` is given, the image is resized to exactly that width
+    (keeping aspect) so ffmpeg can overlay it without ``scale2ref``.
     """
     try:
         font = ImageFont.truetype(settings.watermark_font, 140)
@@ -100,17 +102,40 @@ def _render_watermark_png(text: str, dest: Path) -> None:
 
     img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    # Semi-transparent light grey with a faint dark outline for legibility on
-    # any background.
     draw.text(
         (pad - left, pad - top),
         text,
         font=font,
-        fill=(200, 200, 200, 130),
+        fill=(200, 200, 200, 105),
         stroke_width=stroke,
-        stroke_fill=(0, 0, 0, 90),
+        stroke_fill=(0, 0, 0, 70),
     )
+
+    if target_width and img.width:
+        ratio = target_width / img.width
+        img = img.resize(
+            (target_width, max(1, round(img.height * ratio))), Image.LANCZOS
+        )
+
     img.save(dest, "PNG")
+
+
+async def _probe_dimensions(source: Path) -> tuple[int, int]:
+    """Return (width, height) of the video, or (0, 0) if it can't be read."""
+    exe = ffmpeg_path()
+    if not exe:
+        return 0, 0
+    proc = await asyncio.create_subprocess_exec(
+        exe, "-hide_banner", "-i", str(source),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    text = stderr.decode("utf-8", errors="replace")
+    match = re.search(r"Video:.*?(\d{2,5})x(\d{2,5})", text)
+    if match:
+        return int(match.group(1)), int(match.group(2))
+    return 0, 0
 
 
 class VideoProcessor:
@@ -166,30 +191,27 @@ class VideoProcessor:
         return out
 
     async def watermark(self, source: Path, text: str) -> Path:
-        """Overlay a semi-transparent grey text watermark in the centre.
+        """Overlay a semi-transparent grey text watermark, centred, lower third.
 
-        The text is rendered to a PNG with Pillow and composited via the
-        ``overlay`` filter (sized to ~60% of the video width with ``scale2ref``),
-        so it works even with the bundled ffmpeg that lacks ``drawtext``.
+        The text is rendered to a PNG with Pillow already sized to ~55% of the
+        video width (so no ffmpeg ``scale2ref`` is needed — it's unreliable on
+        the bundled ffmpeg 7.0), then composited with a plain ``overlay``.
         """
         out = _output_path(source, "wm")
         wm_png = source.with_name(f"{source.stem}_wm_{uuid.uuid4().hex[:8]}.png")
 
-        # Pillow is blocking — render off the event loop.
-        await asyncio.to_thread(_render_watermark_png, text, wm_png)
+        # Size the watermark relative to the actual video width.
+        vid_w, _vid_h = await _probe_dimensions(source)
+        target_w = int(vid_w * 0.55) if vid_w else 600
 
-        # Scale the watermark to ~7% of the video height and overlay it in the
-        # bottom-right corner. Notes for the (minimal, bundled) ffmpeg:
-        #   * "-loop 1" turns the single PNG into a continuous stream and
-        #     "shortest=1" ends output with the video — without these the
-        #     overlay produced "No filtered frames" (audio-only / black) output;
-        #   * the result is labelled [out] and mapped explicitly, since with a
-        #     complex filtergraph ffmpeg won't auto-map the video;
-        #   * "0:a?" keeps the audio if the source has any.
-        filter_complex = (
-            "[1:v][0:v]scale2ref=w=main_w*0.6:h=-1[wm][base];"
-            "[base][wm]overlay=(W-w)/2:(H-h)/2:shortest=1[out]"
-        )
+        # Pillow is blocking — render (and resize) off the event loop.
+        await asyncio.to_thread(_render_watermark_png, text, wm_png, target_w)
+
+        # "-loop 1" + "shortest=1" turn the single PNG into a stream that ends
+        # with the video (otherwise overlay yields "No filtered frames"); the
+        # output is labelled [out] and mapped explicitly (a complex filtergraph
+        # isn't auto-mapped); "0:a?" keeps audio if present. Centred, lower third.
+        filter_complex = "[0:v][1:v]overlay=(W-w)/2:(H-h)*0.72:shortest=1[out]"
         args = [
             "-i", str(source),
             "-loop", "1", "-i", str(wm_png),

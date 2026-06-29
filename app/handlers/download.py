@@ -18,6 +18,7 @@ from app.services.downloader import (
     PhotoResult,
     VideoDownloader,
 )
+from app.handlers.sending import send_video
 from app.services.session_store import ActiveVideo, SessionStore
 from app.utils.helpers import (
     detect_platform,
@@ -82,12 +83,18 @@ async def handle_link(
         ),
     )
 
-    await status.edit_text(
-        texts.DOWNLOAD_DONE.format(
-            title=result.title[:80],
-            duration=format_duration(result.duration),
-        ),
+    # Send the video itself, with the action buttons attached underneath it.
+    await status.delete()
+    caption = texts.VIDEO_READY_CAPTION.format(
+        title=result.title[:80],
+        duration=format_duration(result.duration),
+    )
+    await send_video(
+        message,
+        result.path,
+        caption=caption,
         reply_markup=keyboards.action_menu(),
+        cleanup=False,
     )
 
 
