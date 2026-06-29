@@ -85,7 +85,7 @@ def _render_watermark_png(text: str, dest: Path) -> None:
     which is absent from the bundled (imageio) ffmpeg build.
     """
     try:
-        font = ImageFont.truetype(settings.watermark_font, 96)
+        font = ImageFont.truetype(settings.watermark_font, 140)
     except OSError:
         font = ImageFont.load_default()
 
@@ -100,13 +100,15 @@ def _render_watermark_png(text: str, dest: Path) -> None:
 
     img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
+    # Semi-transparent light grey with a faint dark outline for legibility on
+    # any background.
     draw.text(
         (pad - left, pad - top),
         text,
         font=font,
-        fill=(255, 255, 255, 255),
+        fill=(200, 200, 200, 130),
         stroke_width=stroke,
-        stroke_fill=(0, 0, 0, 200),
+        stroke_fill=(0, 0, 0, 90),
     )
     img.save(dest, "PNG")
 
@@ -164,10 +166,10 @@ class VideoProcessor:
         return out
 
     async def watermark(self, source: Path, text: str) -> Path:
-        """Overlay a semi-transparent text watermark in the bottom-right corner.
+        """Overlay a semi-transparent grey text watermark in the centre.
 
         The text is rendered to a PNG with Pillow and composited via the
-        ``overlay`` filter (sized to ~7% of the video height with ``scale2ref``),
+        ``overlay`` filter (sized to ~60% of the video width with ``scale2ref``),
         so it works even with the bundled ffmpeg that lacks ``drawtext``.
         """
         out = _output_path(source, "wm")
@@ -185,8 +187,8 @@ class VideoProcessor:
         #     complex filtergraph ffmpeg won't auto-map the video;
         #   * "0:a?" keeps the audio if the source has any.
         filter_complex = (
-            "[1:v][0:v]scale2ref=w=-1:h=main_h*0.09[wm][base];"
-            "[base][wm]overlay=W-w-25:H-h-25:shortest=1[out]"
+            "[1:v][0:v]scale2ref=w=main_w*0.6:h=-1[wm][base];"
+            "[base][wm]overlay=(W-w)/2:(H-h)/2:shortest=1[out]"
         )
         args = [
             "-i", str(source),
