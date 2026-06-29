@@ -14,6 +14,7 @@ event loop is never blocked. A global semaphore bounds concurrency.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import random
 import uuid
 from datetime import datetime, timezone
@@ -29,6 +30,9 @@ log = get_logger(__name__)
 
 # Bounds how many ffmpeg processes run at once across the whole bot.
 _semaphore = asyncio.Semaphore(settings.max_concurrent_jobs)
+
+# Hard cap on a single ffmpeg run so a stuck process can't hang the bot.
+_FFMPEG_TIMEOUT = 300
 
 
 class ProcessingError(Exception):
@@ -50,7 +54,16 @@ async def _run_ffmpeg(args: list[str]) -> None:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        _, stderr = await proc.communicate()
+        try:
+            _, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=_FFMPEG_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            with contextlib.suppress(Exception):
+                await proc.wait()
+            log.warning("ffmpeg.timeout", timeout=_FFMPEG_TIMEOUT)
+            raise ProcessingError("processing timed out") from None
 
     if proc.returncode != 0:
         err = stderr.decode("utf-8", errors="replace").strip()
@@ -113,16 +126,17 @@ class VideoProcessor:
         # Crop a few pixels and scale back up to the original size, which shifts
         # every pixel slightly without visibly changing the framing.
         crop_px = random.choice([2, 4, 6])
-        noise_strength = random.choice([2, 3, 4])
         tempo = round(random.uniform(0.98, 1.02), 3)
         fresh_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
+        # NB: no per-pixel `noise` filter here — it's very CPU-heavy and would
+        # stall encoding on small (1 vCPU) hosts. The crop/scale + colour tweaks
+        # + full re-encode already change every pixel and all perceptual hashes.
         vf = (
             f"crop=iw-{crop_px}:ih-{crop_px},"
             f"scale=iw+{crop_px}:ih+{crop_px},"
             f"eq=brightness={brightness}:contrast={contrast}:"
             f"saturation={saturation}:gamma={gamma},"
-            f"noise=alls={noise_strength}:allf=t+u,"
             f"setpts={round(1 / tempo, 4)}*PTS"
         )
         # Keep audio in sync with the video speed change.
@@ -135,7 +149,7 @@ class VideoProcessor:
             "-map_metadata", "-1",
             "-metadata", f"creation_time={fresh_ts}",
             "-c:v", "libx264",
-            "-preset", "veryfast",
+            "-preset", "superfast",
             "-crf", "23",
             "-c:a", "aac",
             "-b:a", "128k",
@@ -160,16 +174,26 @@ class VideoProcessor:
         # Pillow is blocking — render off the event loop.
         await asyncio.to_thread(_render_watermark_png, text, wm_png)
 
+        # Scale the watermark to ~7% of the video height and overlay it in the
+        # bottom-right corner. Notes for the (minimal, bundled) ffmpeg:
+        #   * "-loop 1" turns the single PNG into a continuous stream and
+        #     "shortest=1" ends output with the video — without these the
+        #     overlay produced "No filtered frames" (audio-only / black) output;
+        #   * the result is labelled [out] and mapped explicitly, since with a
+        #     complex filtergraph ffmpeg won't auto-map the video;
+        #   * "0:a?" keeps the audio if the source has any.
         filter_complex = (
             "[1:v][0:v]scale2ref=w=-1:h=main_h*0.07[wm][base];"
-            "[base][wm]overlay=W-w-25:H-h-25"
+            "[base][wm]overlay=W-w-25:H-h-25:shortest=1[out]"
         )
         args = [
             "-i", str(source),
-            "-i", str(wm_png),
+            "-loop", "1", "-i", str(wm_png),
             "-filter_complex", filter_complex,
+            "-map", "[out]",
+            "-map", "0:a?",
             "-c:v", "libx264",
-            "-preset", "veryfast",
+            "-preset", "superfast",
             "-crf", "23",
             "-c:a", "copy",
             "-movflags", "+faststart",
