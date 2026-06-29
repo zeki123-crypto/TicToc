@@ -1,3 +1,3 @@
 """TicToc — production-ready async Telegram bot for downloading and processing video."""
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
