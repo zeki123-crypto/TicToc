@@ -14,7 +14,9 @@ import yt_dlp
 
 from app.config import settings
 from app.logging_config import get_logger
+from app.services import tiktok
 from app.utils.ffmpeg import ffmpeg_path
+from app.utils.helpers import is_tiktok
 
 log = get_logger(__name__)
 
@@ -199,6 +201,17 @@ class VideoDownloader:
             DownloadError: any other failure.
         """
         log.info("download.start", url=url)
+
+        # TikTok: use the resolver API first (reliable from servers).
+        if is_tiktok(url):
+            try:
+                return await self._download_tiktok(url)
+            except (DurationLimitError, PhotoPostError):
+                raise
+            except tiktok.TikTokError as exc:
+                log.warning("tiktok.api_failed", url=url, error=str(exc))
+                # fall through to yt-dlp as a backup
+
         try:
             result = await asyncio.to_thread(self._download_sync, url)
         except (DurationLimitError, PhotoPostError):
@@ -217,6 +230,33 @@ class VideoDownloader:
             size_mb=round(result.size_bytes / (1024 * 1024), 2),
         )
         return result
+
+    async def _download_tiktok(self, url: str) -> DownloadResult:
+        """Download a TikTok video via the resolver API.
+
+        Raises PhotoPostError for slideshow posts so the caller routes to the
+        image flow, and TikTokError on API failure so the caller can fall back.
+        """
+        meta = await tiktok.fetch_meta(url)
+        if meta.is_images:
+            raise PhotoPostError()
+        if not meta.video_url:
+            raise tiktok.TikTokError("no video url in response")
+
+        limit = settings.max_duration_seconds
+        if limit and meta.duration > limit:
+            raise DurationLimitError(meta.duration)
+
+        path = await tiktok.download_video(meta.video_url, self.download_dir)
+        log.info("tiktok.video.done", url=url, path=str(path))
+        return DownloadResult(
+            path=path,
+            title=meta.title,
+            duration=meta.duration,
+            width=0,
+            height=0,
+            ext="mp4",
+        )
 
     # ------------------------------------------------------------------ #
     #  Image-post (TikTok slideshow) support
@@ -275,9 +315,31 @@ class VideoDownloader:
 
         return PhotoResult(images=images, title=title, audio=audio)
 
+    async def _download_tiktok_photos(self, url: str) -> PhotoResult:
+        """Download a TikTok slideshow (images + music) via the resolver API."""
+        meta = await tiktok.fetch_meta(url)
+        if not meta.image_urls:
+            raise tiktok.TikTokError("no images in response")
+        images, audio = await tiktok.download_images(
+            meta.image_urls, meta.music_url, self.download_dir
+        )
+        return PhotoResult(images=images, title=meta.title, audio=audio)
+
     async def download_photos(self, url: str) -> PhotoResult:
         """Download all images (and music) of an image-only post."""
         log.info("photos.start", url=url)
+
+        # TikTok: prefer the resolver API.
+        if is_tiktok(url):
+            try:
+                result = await self._download_tiktok_photos(url)
+                log.info("photos.done", url=url, count=len(result.images),
+                         audio=bool(result.audio), via="tikwm")
+                return result
+            except tiktok.TikTokError as exc:
+                log.warning("tiktok.photos_api_failed", url=url, error=str(exc))
+                # fall through to yt-dlp
+
         try:
             result = await asyncio.to_thread(self._download_photos_sync, url)
         except DownloadError:
