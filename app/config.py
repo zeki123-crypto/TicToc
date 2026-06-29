@@ -54,6 +54,18 @@ class Settings(BaseSettings):
     # --- Logging ---
     log_level: str = Field("INFO", alias="LOG_LEVEL")
 
+    @field_validator("bot_token", mode="before")
+    @classmethod
+    def _clean_token(cls, value: object) -> object:
+        """Strip whitespace/newlines and surrounding quotes from the token.
+
+        Copy-paste from a hosting panel often adds a trailing newline or wraps
+        the value in quotes, which aiogram rejects as an invalid token.
+        """
+        if isinstance(value, str):
+            return value.strip().strip('"').strip("'").strip()
+        return value
+
     @field_validator("admin_ids", mode="before")
     @classmethod
     def _parse_admin_ids(cls, value: object) -> list[int]:
