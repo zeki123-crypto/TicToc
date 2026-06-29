@@ -65,7 +65,10 @@ app/
 
 ## ☁️ Deploy
 
-- **VPS (Hetzner / any Ubuntu server) — recommended for reliable 24/7:**
+- **Bothost.ru (RU bot hosting, free tier, deploy from Git):** see
+  **[DEPLOY_BOTHOST.md](DEPLOY_BOTHOST.md)**. Use the **Dockerfile** build so
+  ffmpeg is available. Ships `main.py`, `Procfile`, `runtime.txt`.
+- **VPS (Hetzner / any Ubuntu server) — most reliable 24/7:**
   see **[DEPLOY_VPS.md](DEPLOY_VPS.md)**. One-command Docker setup
   (`deploy/setup.sh`), update script (`deploy/deploy.sh`) and an optional
   systemd unit.
