@@ -10,7 +10,7 @@ from aiogram.types import CallbackQuery, FSInputFile, Message
 
 from app import keyboards, texts
 from app.config import settings
-from app.handlers.sending import send_video
+from app.handlers.sending import send_video, signature
 from app.logging_config import get_logger
 from app.services.downloader import VideoDownloader
 from app.services.processor import ProcessingError, VideoProcessor
@@ -141,7 +141,7 @@ async def on_extract_audio(
             return
         await query.message.answer_audio(
             FSInputFile(out),
-            caption=texts.AUDIO_CAPTION,
+            caption=f"{texts.AUDIO_CAPTION}{await signature(query.message)}",
             title=video.title[:60],
         )
     except Exception as exc:  # noqa: BLE001

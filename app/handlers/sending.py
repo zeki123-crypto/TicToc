@@ -13,6 +13,17 @@ from app.utils.helpers import human_size, safe_unlink
 log = get_logger(__name__)
 
 
+async def signature(message: Message) -> str:
+    """A short '📥 Скачано в @bot' credit line (bot username resolved live)."""
+    try:
+        me = await message.bot.me()  # cached by aiogram after the first call
+        if me.username:
+            return f"\n\n📥 Скачано в @{me.username}"
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
 async def send_video(
     message: Message,
     path: Path,
@@ -44,7 +55,7 @@ async def send_video(
     try:
         await message.answer_video(
             FSInputFile(path),
-            caption=caption,
+            caption=f"{caption}{await signature(message)}",
             reply_markup=reply_markup,
             supports_streaming=True,
         )
