@@ -145,27 +145,32 @@ class VideoProcessor:
         """Produce a perceptually-similar but distinct copy of the video."""
         out = _output_path(source, "unique")
 
-        # Stronger, randomised transforms so platforms (TikTok etc.) are far
-        # less likely to flag the result as a duplicate/repost. Every run differs.
-        brightness = round(random.uniform(-0.06, 0.06), 3)
-        contrast = round(random.uniform(0.92, 1.08), 3)
-        saturation = round(random.uniform(0.90, 1.12), 3)
-        gamma = round(random.uniform(0.93, 1.07), 3)
+        # Randomised transforms so platforms (TikTok etc.) are less likely to
+        # flag the result as a duplicate/repost. No mirror/flip (it visibly
+        # reverses the content); instead a mix of light/colour correction, a
+        # hue shift, a gentle sharpen, a zoom and a speed change. Every run
+        # differs, and together they change every pixel + the colour/audio
+        # fingerprints while looking natural.
+        brightness = round(random.uniform(-0.07, 0.07), 3)
+        contrast = round(random.uniform(0.90, 1.10), 3)
+        saturation = round(random.uniform(0.88, 1.14), 3)
+        gamma = round(random.uniform(0.92, 1.08), 3)
+        hue_deg = round(random.uniform(-12, 12), 1)        # colour-tone shift
+        hue_sat = round(random.uniform(0.94, 1.08), 3)
+        sharpen = round(random.uniform(0.3, 0.9), 2)        # subtle detail change
         # Noticeable zoom (crop then scale back) changes framing & every pixel.
         crop_px = random.choice([8, 12, 16, 20])
-        # Bigger speed change shifts both the video and the audio fingerprint.
+        # Speed change shifts both the video and the audio fingerprint.
         tempo = round(random.uniform(0.93, 1.07), 3)
         fresh_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
-        # hflip (mirror) is the single most effective change against perceptual
-        # hashing. No per-pixel `noise` filter — too CPU-heavy on 1-vCPU hosts;
-        # the mirror + zoom + colour + re-encode already change every pixel.
         vf = (
-            "hflip,"
             f"crop=iw-{crop_px}:ih-{crop_px},"
             f"scale=iw+{crop_px}:ih+{crop_px},"
             f"eq=brightness={brightness}:contrast={contrast}:"
             f"saturation={saturation}:gamma={gamma},"
+            f"hue=h={hue_deg}:s={hue_sat},"
+            f"unsharp=5:5:{sharpen}:5:5:0.0,"
             f"setpts={round(1 / tempo, 4)}*PTS"
         )
         # Keep audio in sync with the speed change (also alters its fingerprint).
@@ -231,4 +236,20 @@ class VideoProcessor:
         finally:
             wm_png.unlink(missing_ok=True)
         log.info("watermark.done", out=str(out))
+        return out
+
+    async def extract_audio(self, source: Path) -> Path:
+        """Extract the audio track from a video as an MP3 file."""
+        token = uuid.uuid4().hex[:8]
+        out = source.with_name(f"{source.stem}_audio_{token}.mp3")
+        args = [
+            "-i", str(source),
+            "-vn",
+            "-c:a", "libmp3lame",
+            "-q:a", "2",
+            str(out),
+        ]
+        log.info("audio.start", source=str(source))
+        await _run_ffmpeg(args)
+        log.info("audio.done", out=str(out))
         return out

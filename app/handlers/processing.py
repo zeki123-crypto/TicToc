@@ -3,14 +3,16 @@ from __future__ import annotations
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, FSInputFile, Message
 
 from app import keyboards, texts
+from app.config import settings
 from app.handlers.sending import send_video
 from app.logging_config import get_logger
 from app.services.processor import ProcessingError, VideoProcessor
 from app.services.session_store import ActiveVideo, SessionStore
 from app.states import WatermarkFlow
+from app.utils.helpers import human_size, safe_unlink
 
 log = get_logger(__name__)
 router = Router(name="processing")
@@ -55,6 +57,50 @@ async def on_uniquify(
         reply_markup=keyboards.after_uniquify_menu(),
         cleanup=False,
     )
+
+
+# --------------------------------------------------------------------------- #
+#  Callback: extract audio
+# --------------------------------------------------------------------------- #
+@router.callback_query(F.data == keyboards.CB_AUDIO)
+async def on_extract_audio(
+    query: CallbackQuery, store: SessionStore, processor: VideoProcessor
+) -> None:
+    await query.answer()
+    video = _get_active(store, query.message.chat.id)
+    if not video:
+        await query.message.answer(texts.SESSION_EXPIRED)
+        return
+
+    status = await query.message.answer(texts.EXTRACTING_AUDIO)
+    try:
+        out = await processor.extract_audio(video.path)
+    except ProcessingError as exc:
+        await status.edit_text(texts.PROCESSING_FAILED.format(error=str(exc)[:200]))
+        return
+
+    await status.delete()
+    try:
+        size = out.stat().st_size if out.exists() else 0
+        if size == 0 or size > settings.max_file_size_bytes:
+            await query.message.answer(
+                texts.FILE_TOO_LARGE.format(
+                    size=human_size(size), limit=settings.max_file_size_mb
+                )
+                if size
+                else texts.SESSION_EXPIRED
+            )
+            return
+        await query.message.answer_audio(
+            FSInputFile(out),
+            caption=texts.AUDIO_CAPTION,
+            title=video.title[:60],
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.error("audio.send_failed", error=str(exc))
+        await query.message.answer(texts.GENERIC_ERROR)
+    finally:
+        safe_unlink(out)
 
 
 # --------------------------------------------------------------------------- #
