@@ -80,6 +80,7 @@ async def handle_link(
             path=result.path,
             title=result.title,
             duration=result.duration,
+            url=url,
         ),
     )
 

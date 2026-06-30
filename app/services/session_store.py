@@ -17,6 +17,9 @@ class ActiveVideo:
     path: Path
     title: str
     duration: int
+    # Source URL, kept so the file can be re-downloaded if it's lost from the
+    # ephemeral disk (e.g. cleanup race or container restart).
+    url: str | None = None
 
 
 class SessionStore:
