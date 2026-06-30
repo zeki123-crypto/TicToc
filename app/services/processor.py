@@ -78,6 +78,21 @@ def _output_path(source: Path, suffix: str) -> Path:
     return source.with_name(f"{source.stem}_{suffix}_{token}.mp4")
 
 
+def _cap_scale() -> str:
+    """ffmpeg scale fragment that caps the longest side to ``max_dimension``.
+
+    Never upscales; keeps aspect; forces even dimensions. Returns a string with
+    a trailing comma (or empty when the cap is disabled) for easy insertion.
+    """
+    d = settings.max_dimension
+    if not d:
+        return ""
+    return (
+        f"scale='if(gte(iw,ih),min({d},iw),-2)':"
+        f"'if(gte(iw,ih),-2,min({d},ih))',"
+    )
+
+
 def _render_watermark_png(text: str, dest: Path, target_width: int | None = None) -> None:
     """Render watermark text to a transparent PNG using Pillow.
 
@@ -172,9 +187,13 @@ class VideoProcessor:
         new_sr = int(48000 * pitch)
         fresh_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
+        # Crop (zoom) first, then downscale EARLY so the per-pixel filters
+        # (eq/hue/colorbalance/unsharp) run at the reduced resolution — much
+        # faster. ``_cap_scale`` also serves as the post-crop rescale; when the
+        # cap is disabled we just keep the (slightly smaller) cropped frame.
         vf = (
             f"crop=iw-{crop_px}:ih-{crop_px},"
-            f"scale=iw+{crop_px}:ih+{crop_px},"
+            f"{_cap_scale()}"
             f"eq=brightness={brightness}:contrast={contrast}:"
             f"saturation={saturation}:gamma={gamma},"
             f"hue=h={hue_deg}:s={hue_sat},"
@@ -197,9 +216,10 @@ class VideoProcessor:
             "-af", af,
             "-map_metadata", "-1",
             "-metadata", f"creation_time={fresh_ts}",
+            "-threads", "0",
             "-c:v", "libx264",
-            "-preset", "superfast",
-            "-crf", "23",
+            "-preset", settings.ffmpeg_preset,
+            "-crf", "24",
             "-c:a", "aac",
             "-b:a", "128k",
             "-movflags", "+faststart",
@@ -220,27 +240,40 @@ class VideoProcessor:
         out = _output_path(source, "wm")
         wm_png = source.with_name(f"{source.stem}_wm_{uuid.uuid4().hex[:8]}.png")
 
-        # Size the watermark relative to the actual video width.
-        vid_w, _vid_h = await _probe_dimensions(source)
-        target_w = int(vid_w * 0.55) if vid_w else 600
+        # Work out the final (optionally capped) dimensions, then size the
+        # watermark to ~55% of the final width.
+        vid_w, vid_h = await _probe_dimensions(source)
+        cap = settings.max_dimension
+        if vid_w and vid_h and cap and max(vid_w, vid_h) > cap:
+            factor = cap / max(vid_w, vid_h)
+            out_w = (round(vid_w * factor) // 2) * 2
+            out_h = (round(vid_h * factor) // 2) * 2
+        else:
+            out_w, out_h = vid_w, vid_h
+        target_w = int(out_w * 0.55) if out_w else 600
 
         # Pillow is blocking — render (and resize) off the event loop.
         await asyncio.to_thread(_render_watermark_png, text, wm_png, target_w)
 
-        # "-loop 1" + "shortest=1" turn the single PNG into a stream that ends
-        # with the video (otherwise overlay yields "No filtered frames"); the
-        # output is labelled [out] and mapped explicitly (a complex filtergraph
-        # isn't auto-mapped); "0:a?" keeps audio if present. Centred, lower third.
-        filter_complex = "[0:v][1:v]overlay=(W-w)/2:(H-h)*0.72:shortest=1[out]"
+        # Scale the base video to the final size (if capped), then overlay the
+        # PNG centred in the lower third. "-loop 1" + "shortest=1" make the
+        # single PNG last for the whole video; [out] is mapped explicitly (a
+        # complex filtergraph isn't auto-mapped); "0:a?" keeps audio if present.
+        scale = f"scale={out_w}:{out_h}," if (out_w and (out_w, out_h) != (vid_w, vid_h)) else ""
+        filter_complex = (
+            f"[0:v]{scale}format=yuv420p[base];"
+            "[base][1:v]overlay=(W-w)/2:(H-h)*0.72:shortest=1[out]"
+        )
         args = [
             "-i", str(source),
             "-loop", "1", "-i", str(wm_png),
             "-filter_complex", filter_complex,
             "-map", "[out]",
             "-map", "0:a?",
+            "-threads", "0",
             "-c:v", "libx264",
-            "-preset", "superfast",
-            "-crf", "23",
+            "-preset", settings.ffmpeg_preset,
+            "-crf", "24",
             "-c:a", "copy",
             "-movflags", "+faststart",
             str(out),

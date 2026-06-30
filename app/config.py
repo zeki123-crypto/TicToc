@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     # --- Rate limiting & processing ---
     throttle_rate: float = Field(2.0, alias="THROTTLE_RATE")
     max_concurrent_jobs: int = Field(2, alias="MAX_CONCURRENT_JOBS")
+    # x264 speed preset (ultrafast..medium). "ultrafast" = fastest encode.
+    ffmpeg_preset: str = Field("ultrafast", alias="FFMPEG_PRESET")
+    # Cap the longest side of processed video (px) to speed up encode/upload.
+    # 0 disables the cap. 1280 ≈ 720p-class, a good speed/quality balance.
+    max_dimension: int = Field(1280, alias="MAX_DIMENSION")
+    # Delete temp files older than this many minutes (background cleanup).
+    temp_file_ttl_minutes: int = Field(20, alias="TEMP_FILE_TTL_MINUTES")
     watermark_font: str = Field(
         str(_BUNDLED_FONT),
         alias="WATERMARK_FONT",

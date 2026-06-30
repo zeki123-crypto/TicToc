@@ -1,6 +1,10 @@
 """Bot & dispatcher factory and application lifecycle."""
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import time
+
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -11,11 +15,36 @@ from app.config import settings
 from app.handlers import get_main_router
 from app.logging_config import get_logger
 from app.middlewares.throttling import ThrottlingMiddleware
+from app.services import tiktok
 from app.services.downloader import VideoDownloader
 from app.services.processor import VideoProcessor
 from app.services.session_store import SessionStore
 
 log = get_logger(__name__)
+
+# Holds the background cleanup task so it can be cancelled on shutdown.
+_cleanup_task: asyncio.Task | None = None
+
+
+async def _cleanup_loop() -> None:
+    """Periodically delete stale temp files so disk can't fill under load."""
+    ttl = max(60, settings.temp_file_ttl_minutes * 60)
+    while True:
+        await asyncio.sleep(300)
+        now = time.time()
+        removed = 0
+        try:
+            for path in settings.download_dir.glob("*"):
+                try:
+                    if path.is_file() and now - path.stat().st_mtime > ttl:
+                        path.unlink(missing_ok=True)
+                        removed += 1
+                except OSError:
+                    continue
+        except Exception as exc:  # noqa: BLE001
+            log.warning("cleanup.error", error=str(exc))
+        if removed:
+            log.info("cleanup.removed", count=removed)
 
 
 def create_bot() -> Bot:
@@ -74,7 +103,17 @@ async def _on_startup(bot: Bot) -> None:
     me = await bot.get_me()
     log.info("bot.started", username=me.username, id=me.id)
 
+    global _cleanup_task
+    _cleanup_task = asyncio.create_task(_cleanup_loop())
+
 
 async def _on_shutdown(store: SessionStore) -> None:
+    global _cleanup_task
+    if _cleanup_task:
+        _cleanup_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await _cleanup_task
+        _cleanup_task = None
     store.cleanup_all()
+    await tiktok.close_session()
     log.info("bot.stopped")

@@ -25,7 +25,29 @@ _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
-_TIMEOUT = aiohttp.ClientTimeout(total=60)
+_TIMEOUT = aiohttp.ClientTimeout(total=60, connect=15)
+
+# A single shared session (connection pooling) reused across all requests —
+# far cheaper than creating one per call under load.
+_session: aiohttp.ClientSession | None = None
+
+
+def _get_session() -> aiohttp.ClientSession:
+    global _session
+    if _session is None or _session.closed:
+        connector = aiohttp.TCPConnector(limit=100, limit_per_host=20, ttl_dns_cache=300)
+        _session = aiohttp.ClientSession(
+            timeout=_TIMEOUT, headers={"User-Agent": _UA}, connector=connector
+        )
+    return _session
+
+
+async def close_session() -> None:
+    """Close the shared session (call on shutdown)."""
+    global _session
+    if _session and not _session.closed:
+        await _session.close()
+    _session = None
 
 
 class TikTokError(Exception):
@@ -46,12 +68,10 @@ async def fetch_meta(url: str) -> TikTokMeta:
     """Resolve a TikTok URL to direct media links via tikwm."""
     params = {"url": url, "hd": "1"}
     try:
-        async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
-            async with session.get(
-                _API, params=params, headers={"User-Agent": _UA}
-            ) as resp:
-                resp.raise_for_status()
-                payload = await resp.json(content_type=None)
+        session = _get_session()
+        async with session.get(_API, params=params) as resp:
+            resp.raise_for_status()
+            payload = await resp.json(content_type=None)
     except Exception as exc:  # noqa: BLE001
         raise TikTokError(f"request failed: {exc}") from exc
 
@@ -75,7 +95,7 @@ async def fetch_meta(url: str) -> TikTokMeta:
 
 async def _download_to(session: aiohttp.ClientSession, url: str, dest: Path) -> Path:
     """Stream a remote file to ``dest``."""
-    async with session.get(url, headers={"User-Agent": _UA}) as resp:
+    async with session.get(url) as resp:
         resp.raise_for_status()
         with dest.open("wb") as fh:
             async for chunk in resp.content.iter_chunked(64 * 1024):
@@ -87,8 +107,7 @@ async def download_video(video_url: str, dest_dir: Path) -> Path:
     """Download a single TikTok video file."""
     dest = dest_dir / f"{uuid.uuid4().hex}.mp4"
     try:
-        async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
-            await _download_to(session, video_url, dest)
+        await _download_to(_get_session(), video_url, dest)
     except Exception as exc:  # noqa: BLE001
         dest.unlink(missing_ok=True)
         raise TikTokError(f"video download failed: {exc}") from exc
@@ -103,14 +122,14 @@ async def download_images(
     images: list[Path] = []
     audio: Path | None = None
     try:
-        async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
-            for index, img_url in enumerate(image_urls):
-                dest = dest_dir / f"{token}.{index:02d}.jpg"
-                images.append(await _download_to(session, img_url, dest))
-            if music_url:
-                audio = await _download_to(
-                    session, music_url, dest_dir / f"{token}.music.mp3"
-                )
+        session = _get_session()
+        for index, img_url in enumerate(image_urls):
+            dest = dest_dir / f"{token}.{index:02d}.jpg"
+            images.append(await _download_to(session, img_url, dest))
+        if music_url:
+            audio = await _download_to(
+                session, music_url, dest_dir / f"{token}.music.mp3"
+            )
     except Exception as exc:  # noqa: BLE001
         for path in images:
             path.unlink(missing_ok=True)
