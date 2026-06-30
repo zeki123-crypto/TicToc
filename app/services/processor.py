@@ -162,6 +162,14 @@ class VideoProcessor:
         crop_px = random.choice([8, 12, 16, 20])
         # Speed change shifts both the video and the audio fingerprint.
         tempo = round(random.uniform(0.93, 1.07), 3)
+        # Frame-rate change alters the temporal fingerprint.
+        fps = random.choice([24, 25, 30])
+        # Subtle colour-balance shift (warmer/cooler) in shadows & midtones.
+        cb = lambda: round(random.uniform(-0.06, 0.06), 3)  # noqa: E731
+        rs, gs, bs, rm, gm, bm = cb(), cb(), cb(), cb(), cb(), cb()
+        # Pitch shift (changes the audio fingerprint more than tempo alone).
+        pitch = round(random.uniform(0.95, 1.05), 3)
+        new_sr = int(48000 * pitch)
         fresh_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
         vf = (
@@ -170,11 +178,18 @@ class VideoProcessor:
             f"eq=brightness={brightness}:contrast={contrast}:"
             f"saturation={saturation}:gamma={gamma},"
             f"hue=h={hue_deg}:s={hue_sat},"
+            f"colorbalance=rs={rs}:gs={gs}:bs={bs}:rm={rm}:gm={gm}:bm={bm},"
             f"unsharp=5:5:{sharpen}:5:5:0.0,"
-            f"setpts={round(1 / tempo, 4)}*PTS"
+            f"fps={fps},"
+            f"setpts={round(1 / tempo, 4)}*PTS,"
+            "format=yuv420p"
         )
-        # Keep audio in sync with the speed change (also alters its fingerprint).
-        af = f"atempo={tempo}"
+        # Shift pitch by `pitch` and set the overall tempo to `tempo`:
+        # asetrate raises pitch+tempo, then atempo corrects the tempo back.
+        af = (
+            f"aresample=48000,asetrate={new_sr},aresample=48000,"
+            f"atempo={round(tempo / pitch, 4)}"
+        )
 
         args = [
             "-i", str(source),
